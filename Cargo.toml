@@ -1,0 +1,19 @@
+[package]
+name = "clickup-time-in-status-analyzer"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "src/lib.rs"
+name = "clickup_time_in_status_analyzer"
+
+
+[[bin]]
+path = "src/main.rs"
+name = "clickup_time_in_status_analyzer"
+
+[dependencies]
+chrono = { version = "0.4.43", features = ["serde"] }
+reqwest = { version = "0.13.1", features = ["blocking", "json", "query"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
