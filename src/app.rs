@@ -1,15 +1,21 @@
-use crate::{ClickUpTaskResponseBody, ClickUpTimeInStatusResponseBody};
+use crate::{ClickUpTaskResponseBody, ClickUpTimeInStatusResponseBody, SubTask};
 use chrono::{DateTime, Datelike, Duration, Utc};
 use reqwest::header::HeaderValue;
+use std::{
+    sync::mpsc::{self, Receiver, Sender},
+    thread,
+};
 
 static IN_PROGRESS_ORDER_INDEX: i32 = 5;
 
+#[derive(Clone)]
 pub enum AggregrationMethod {
     Leaf,
     Node,
     NodeAndLeaf,
 }
 
+#[derive(Clone)]
 pub struct Application {
     aggregation_method: AggregrationMethod,
     base_url: String,
@@ -75,37 +81,61 @@ impl Application {
         generate_points_vs_time_spent_analysis_iter(self, task, "".to_string())
     }
 
-    pub fn get_task(&self, task_id: &str) -> ClickUpTaskResponseBody {
-        let url = format!("{}/api/v2/task/{task_id}", self.base_url);
-        let response = self
-            .http_client
-            .get(url)
-            .headers(self.std_headers.clone())
-            .query(&[("include_subtasks", "true")])
-            .send();
-
-        let mut task = response.unwrap().json::<ClickUpTaskResponseBody>().unwrap();
-        let task_time_in_status = self.get_task_time_in_status(task_id);
-        task.time_in_status = Some(task_time_in_status);
-
-        if let (
-            AggregrationMethod::Leaf | AggregrationMethod::NodeAndLeaf | AggregrationMethod::Node,
-            ClickUpTaskResponseBody {
-                sub_tasks: Some(sub_tasks),
-                ..
-            },
-        ) = (&self.aggregation_method, &mut task)
-        {
-            for sub_task_record in sub_tasks {
-                let sub_task = self.get_task(&sub_task_record.id);
-                sub_task_record.task = Some(sub_task);
-            }
-        };
-
-        dbg!(&task);
-
-        task
-    }
+    // pub fn get_task(&self, task_id: &str) -> ClickUpTaskResponseBody {
+    //     let url = format!("{}/api/v2/task/{task_id}", self.base_url);
+    //     let response = self
+    //         .http_client
+    //         .get(url)
+    //         .headers(self.std_headers.clone())
+    //         .query(&[("include_subtasks", "true")])
+    //         .send();
+    //
+    //     let mut task = response.unwrap().json::<ClickUpTaskResponseBody>().unwrap();
+    //     let task_time_in_status = self.get_task_time_in_status(task_id);
+    //     task.time_in_status = Some(task_time_in_status);
+    //
+    //     let mut children = vec![];
+    //
+    //     if let (
+    //         AggregrationMethod::Leaf | AggregrationMethod::NodeAndLeaf | AggregrationMethod::Node,
+    //         ClickUpTaskResponseBody {
+    //             sub_tasks: Some(sub_tasks),
+    //             ..
+    //         },
+    //     ) = (&self.aggregation_method, &mut task)
+    //     {
+    //         let (tx, rx): (
+    //             Sender<ClickUpTaskResponseBody>,
+    //             Receiver<ClickUpTaskResponseBody>,
+    //         ) = mpsc::channel();
+    //         for sub_task_record in &mut *sub_tasks {
+    //             let thread_tx = tx.clone();
+    //             let sub_task_id = sub_task_record.id.clone();
+    //             let child = thread::spawn(move || {
+    //                 let sub_task = self.get_task(&sub_task_id);
+    //                 thread_tx.send(sub_task).unwrap();
+    //             });
+    //             children.push(child);
+    //             // sub_task_record.task = Some(sub_task);
+    //         }
+    //
+    //         let mut sub_tasks_from_threads = Vec::with_capacity(sub_tasks.len());
+    //         for _ in 0..sub_tasks.len() {
+    //             // The `recv` method picks a message from the channel
+    //             // `recv` will block the current thread if there are no messages available
+    //             sub_tasks_from_threads.push(rx.recv());
+    //         }
+    //
+    //         // Wait for the threads to complete any remaining work
+    //         for child in children {
+    //             child.join().expect("oops! the child thread panicked");
+    //         }
+    //     };
+    //
+    //     dbg!(&task);
+    //
+    //     task
+    // }
 
     fn get_task_time_in_status(&self, task_id: &str) -> ClickUpTimeInStatusResponseBody {
         let url = format!("{}/api/v2/task/{task_id}/time_in_status", self.base_url);
@@ -195,4 +225,80 @@ impl Application {
             AggregrationMethod::NodeAndLeaf => node_time + leaf_time,
         }
     }
+}
+
+pub fn get_task(application: &Application, task_id: &str) -> ClickUpTaskResponseBody {
+    let url = format!("{}/api/v2/task/{task_id}", application.base_url);
+    let response = application
+        .http_client
+        .get(url)
+        .headers(application.std_headers.clone())
+        .query(&[("include_subtasks", "true")])
+        .send();
+
+    let mut task = response.unwrap().json::<ClickUpTaskResponseBody>().unwrap();
+    let task_time_in_status = application.get_task_time_in_status(task_id);
+    task.time_in_status = Some(task_time_in_status);
+
+    let mut children = vec![];
+
+    if let (
+        AggregrationMethod::Leaf | AggregrationMethod::NodeAndLeaf | AggregrationMethod::Node,
+        ClickUpTaskResponseBody {
+            sub_tasks: Some(sub_tasks),
+            ..
+        },
+    ) = (&application.aggregation_method, &mut task)
+    {
+        let (tx, rx): (
+            Sender<ClickUpTaskResponseBody>,
+            Receiver<ClickUpTaskResponseBody>,
+        ) = mpsc::channel();
+        for sub_task_record in &mut *sub_tasks {
+            let thread_tx = tx.clone();
+            let sub_task_id = sub_task_record.id.clone();
+            let app_clone = application.clone();
+            let child = thread::spawn(move || {
+                let sub_task = get_task(&app_clone, &sub_task_id);
+                thread_tx.send(sub_task).unwrap();
+            });
+            children.push(child);
+        }
+
+        // let mut sub_tasks_from_threads = Vec::with_capacity(sub_tasks.len());
+        for _ in 0..sub_tasks.len() {
+            // The `recv` method picks a message from the channel
+            // `recv` will block the current thread if there are no messages available
+            // sub_tasks_from_threads.push(rx.recv().unwrap());
+            let fetched_sub_task = rx.recv().unwrap();
+
+            let position_of_sub_task = sub_tasks
+                .iter()
+                .position(|sub_task| fetched_sub_task.id == sub_task.id)
+                .unwrap();
+            let sub_task = sub_tasks.get_mut(position_of_sub_task).unwrap();
+            sub_task.task = Some(fetched_sub_task);
+        }
+
+        // Wait for the threads to complete any remaining work
+        for child in children {
+            child.join().expect("oops! the child thread panicked");
+        }
+
+        // let sub_tasks: &mut Vec<SubTask> = task.sub_tasks.unwrap().as_mut();
+        // for sub_task_record in &sub_tasks_from_threads {
+        //     let position_of_sub_task = sub_tasks
+        //         .iter()
+        //         .position(|sub_task| sub_task_record.id == sub_task.id)
+        //         .unwrap();
+        //     let sub_task = sub_tasks.get_mut(position_of_sub_task).unwrap();
+        //     sub_task.task = Some(sub_task_record.clone());
+        // }
+
+        // dbg!(&sub_tasks_from_threads);
+    };
+
+    // dbg!(&task);
+
+    task
 }
