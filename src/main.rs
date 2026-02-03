@@ -1,4 +1,7 @@
-use clickup_time_in_status_analyzer::services::clickup::ClickUpService;
+use clickup_time_in_status_analyzer::{
+    domain::{Ticket, generate_points_vs_time_spent_analysis},
+    services::clickup::ClickUpService,
+};
 
 // static TASK: &str = "86aea18zr";
 static TASK: &str = "86a8jcehg";
@@ -11,7 +14,8 @@ fn main() {
     let click_up_service = ClickUpService::new(personal_access_token);
 
     let task = click_up_service.get_task(TASK);
-    let result = click_up_service.generate_points_vs_time_spent_analysis(&task);
+    let ticket = Ticket::from(task);
+    let result = generate_points_vs_time_spent_analysis(&ticket);
 
     println!("{result}")
 }
