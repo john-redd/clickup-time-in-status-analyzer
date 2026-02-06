@@ -13,6 +13,7 @@ path = "src/main.rs"
 name = "clickup_time_in_status_analyzer"
 
 [dependencies]
+async-recursion = "1.1.1"
 axum = { version = "0.8.6", features = ["macros"] }
 chrono = { version = "0.4.43", features = ["serde"] }
 reqwest = { version = "0.13.1", features = ["blocking", "json", "query"] }
