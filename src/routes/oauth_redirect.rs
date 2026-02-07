@@ -1,11 +1,11 @@
 use crate::AppState;
 use axum::{
-    Json,
     extract::{Query, State},
     http::StatusCode,
-    response::IntoResponse,
+    response::{IntoResponse, Redirect},
 };
 use serde::Deserialize;
+use tower_sessions::Session;
 
 #[derive(Deserialize)]
 pub struct OauthRedirectQueryParams {
@@ -15,6 +15,7 @@ pub struct OauthRedirectQueryParams {
 pub async fn oauth_redirect(
     State(app_state): State<AppState>,
     Query(query_params): Query<OauthRedirectQueryParams>,
+    session: Session,
 ) -> impl IntoResponse {
     let code = query_params.code;
 
@@ -25,5 +26,11 @@ pub async fn oauth_redirect(
         }
     };
 
-    (StatusCode::OK, Json(body)).into_response()
+    match session
+        .insert("click_up_access_token", body.access_token)
+        .await
+    {
+        Ok(_) => Redirect::temporary("/workspaces").into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response(),
+    }
 }

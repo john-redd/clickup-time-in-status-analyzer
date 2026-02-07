@@ -1,9 +1,10 @@
 use axum::{Router, routing::get, serve};
 use clickup_time_in_status_analyzer::AppState;
-use clickup_time_in_status_analyzer::routes::{health, login, oauth_redirect};
+use clickup_time_in_status_analyzer::routes::{health, login, oauth_redirect, workspaces};
 use clickup_time_in_status_analyzer::services::clickup::ClickUpService;
 use std::error::Error;
 use std::sync::Arc;
+use tower_sessions::{MemoryStore, SessionManagerLayer};
 
 // static TASK: &str = "86aea18zr";
 static TASK: &str = "86a8jcehg";
@@ -29,10 +30,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:13000").await?;
 
+    let session_store = MemoryStore::default();
+    let session_layer = SessionManagerLayer::new(session_store)
+        .with_secure(false)
+        .with_same_site(tower_sessions::cookie::SameSite::Lax);
+
     let app = Router::new()
         .route("/api/v1/health", get(health))
         .route("/login", get(login))
         .route("/oauth/redirect", get(oauth_redirect))
+        .route("/workspaces", get(workspaces))
+        .layer(session_layer)
         .with_state(app_state);
 
     let server = serve(listener, app);
