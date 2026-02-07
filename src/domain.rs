@@ -1,5 +1,7 @@
+#![allow(dead_code)]
+
 use crate::services::clickup::{ClickUpTaskResponseBody, IN_PROGRESS_ORDER_INDEX};
-use chrono::{DateTime, Datelike, Utc};
+use chrono::{DateTime, Utc};
 
 #[derive(Debug)]
 pub struct Ticket {
@@ -61,9 +63,6 @@ impl From<ClickUpTaskResponseBody> for Ticket {
 
 pub fn generate_points_vs_time_spent_analysis(task: &Ticket) -> String {
     fn generate_points_vs_time_spent_analysis_iter(task: &Ticket, mut prefix: String) -> String {
-        // let points = get_sprint_points(task);
-        // let time_in_status_count = get_days_in_dev_status(task);
-
         let mut result = format!(
             "\n{prefix}{} - points: {} ({}), time_spent: {} ({})",
             task.number,
@@ -75,15 +74,11 @@ pub fn generate_points_vs_time_spent_analysis(task: &Ticket) -> String {
 
         prefix.push('\t');
 
-        // if let Some(sub_tasks) = &task.sub_tickets {
         for sub_task in &task.sub_tickets {
-            // if let Some(next_task) = &sub_task.task {
             let nested_result =
-                generate_points_vs_time_spent_analysis_iter(&sub_task, prefix.clone());
+                generate_points_vs_time_spent_analysis_iter(sub_task, prefix.clone());
             result.push_str(&nested_result);
         }
-        // }
-        // }
 
         result
     }
@@ -91,10 +86,6 @@ pub fn generate_points_vs_time_spent_analysis(task: &Ticket) -> String {
     generate_points_vs_time_spent_analysis_iter(task, "".to_string())
 }
 
-// fn get_sprint_points(task: &Ticket) -> f32 {
-//     task.points.unwrap_or_default()
-// }
-//
 fn get_days_in_dev_status(task: &ClickUpTaskResponseBody) -> i64 {
     let mut initial_dev_status_start: Option<DateTime<Utc>> = None;
 
