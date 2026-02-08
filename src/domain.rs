@@ -19,7 +19,7 @@ impl From<ClickUpTaskResponseBody> for Ticket {
         let time_in_dev_status = get_days_in_dev_status(&value);
 
         let total_time_in_dev_status = match &value.sub_tasks {
-            Some(sub_tasks) => sub_tasks.iter().fold(time_in_dev_status, |acc, t| {
+            Some(sub_tasks) => sub_tasks.iter().fold(0, |acc, t| {
                 if let Some(task) = &t.task {
                     return acc + get_days_in_dev_status(task);
                 }
@@ -87,8 +87,6 @@ pub fn generate_points_vs_time_spent_analysis(task: &Ticket) -> String {
 }
 
 fn get_days_in_dev_status(task: &ClickUpTaskResponseBody) -> i64 {
-    let mut initial_dev_status_start: Option<DateTime<Utc>> = None;
-
     let total = task
         .time_in_status
         .as_ref()
@@ -98,7 +96,6 @@ fn get_days_in_dev_status(task: &ClickUpTaskResponseBody) -> i64 {
         .filter_map(|s| match &s.order_index {
             Some(order_index) => {
                 if *order_index >= IN_PROGRESS_ORDER_INDEX {
-                    initial_dev_status_start = Some(s.total_time.since);
                     Some(s.total_time.by_minute / 60 / 24)
                 } else {
                     None

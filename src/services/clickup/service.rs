@@ -45,7 +45,7 @@ impl ClickUpService {
             .get(url)
             .header(reqwest::header::ACCEPT, "application/json")
             .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .header(reqwest::header::AUTHORIZATION, token)
+            .header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"))
             .send()
             .await
         {
@@ -64,7 +64,10 @@ impl ClickUpService {
 
         match serde_json::from_str::<ClickUpTimeInStatusResponseBody>(&text) {
             Ok(v) => Ok(v),
-            Err(e) => Err(ClickUpServiceError::ParseError(Box::new(e), Some(text))),
+            Err(e) => Err(ClickUpServiceError::ParseError(
+                Box::new(e),
+                Some(format!("get_task_time_in_status {text}")),
+            )),
         }
     }
 
@@ -75,17 +78,18 @@ impl ClickUpService {
         task_id: &str,
     ) -> Result<ClickUpTaskResponseBody, ClickUpServiceError> {
         let url = format!("{}/api/v2/task/{task_id}", self.base_url);
+        println!("token: {token}");
         let task_future = async {
-            let response = match self
+            let request = self
                 .http_client
                 .get(url)
                 .header(reqwest::header::ACCEPT, "application/json")
                 .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .header(reqwest::header::AUTHORIZATION, token)
-                .query(&[("include_subtasks", "true")])
-                .send()
-                .await
-            {
+                .header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"))
+                .query(&[("include_subtasks", "true")]);
+
+            dbg!(&request);
+            let response = match request.send().await {
                 Ok(response) => response,
                 Err(e) => {
                     return Err(ClickUpServiceError::FailedToSendNetworkRequestError(
@@ -94,6 +98,8 @@ impl ClickUpService {
                 }
             };
 
+            let status_code = response.status();
+
             let text = match response.text().await {
                 Ok(text) => text,
                 Err(e) => return Err(ClickUpServiceError::ParseError(Box::new(e), None)),
@@ -101,7 +107,12 @@ impl ClickUpService {
 
             let task = match serde_json::from_str::<ClickUpTaskResponseBody>(&text) {
                 Ok(task) => task,
-                Err(e) => return Err(ClickUpServiceError::ParseError(Box::new(e), Some(text))),
+                Err(e) => {
+                    return Err(ClickUpServiceError::ParseError(
+                        Box::new(e),
+                        Some(format!("get_task = {status_code} {text}")),
+                    ));
+                }
             };
 
             Ok(task)
@@ -113,6 +124,8 @@ impl ClickUpService {
 
         let mut task = task?;
         let task_time_in_status = task_time_in_status?;
+
+        println!("here");
 
         task.time_in_status = Some(task_time_in_status);
 
@@ -215,12 +228,15 @@ impl ClickUpService {
         token: String,
     ) -> Result<ClickUpGetWorkspacesResponseBody, ClickUpServiceError> {
         let url = format!("{}/api/v2/team", self.base_url);
-        let response = match self
+        let request = self
             .http_client
             .get(url)
             .header(reqwest::header::ACCEPT, "application/json")
             .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .header(reqwest::header::AUTHORIZATION, token)
+            .header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"));
+        dbg!(&request);
+        let response = match
+            request
             .send()
             .await
         {
@@ -278,7 +294,7 @@ pub struct ClickUpWorkspaceMember {
 pub struct ClickUpWorkspaceUser {
     pub id: i32,
     pub username: String,
-    pub color: String,
+    pub color: Option<String>,
     #[serde(rename = "profilePicture")]
     pub profile_picture: Option<String>,
 }

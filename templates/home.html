@@ -8,6 +8,11 @@
 {% endblock %}
 
 {% block content %}
-  <h1>Index</h1>
-  <p>Hello, world!</p>
+<label for="ticket_id">Input Ticket ID:</label>
+<input
+  id="ticket_id"
+  name="ticket_id"
+  hx-get="/ticket"
+  hx-target="#ticket_evaluation" />
+<div id="ticket_evaluation"></div>
 {% endblock %}

@@ -5,6 +5,7 @@ pub mod domain;
 pub mod routes;
 pub mod services;
 pub mod constants;
+pub mod components;
 
 #[derive(Clone)]
 pub struct AppState {

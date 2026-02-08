@@ -1,0 +1,10 @@
+<div id="workspace_select_container">
+  <label for="workspace_id">Choose a Workspace:</label>
+  <select name="workspace_id" id="workspace_id" hx-put="/session/workspace" hx-swap="outerHTML"
+    hx-target="#workspace_select_container">
+    <option value="test_id">Test Name</option>
+    {% for workspace in workspaces %}
+    <option value="{{ workspace.id }}" {% if current_workspace_id==workspace.id %} selected {% endif %}>{{ workspace.name }}</option>
+    {% endfor %}
+  </select>
+</div>

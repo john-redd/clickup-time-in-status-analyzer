@@ -26,6 +26,8 @@ pub async fn oauth_redirect(
         }
     };
 
+    println!("access_token: {}", body.access_token);
+
     match session
         .insert(
             crate::constants::session::CLICK_UP_AUTH_TOKEN,
