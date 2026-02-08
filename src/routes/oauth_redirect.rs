@@ -27,10 +27,13 @@ pub async fn oauth_redirect(
     };
 
     match session
-        .insert("click_up_access_token", body.access_token)
+        .insert(
+            crate::constants::session::CLICK_UP_AUTH_TOKEN,
+            body.access_token,
+        )
         .await
     {
-        Ok(_) => Redirect::temporary("/workspaces").into_response(),
+        Ok(_) => Redirect::temporary("/home").into_response(),
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response(),
     }
 }

@@ -1,10 +1,13 @@
 use axum::{Router, routing::get, serve};
 use clickup_time_in_status_analyzer::AppState;
-use clickup_time_in_status_analyzer::routes::{health, login, oauth_redirect, workspaces};
+use clickup_time_in_status_analyzer::routes::{health, login, oauth_redirect};
 use clickup_time_in_status_analyzer::services::clickup::ClickUpService;
 use std::error::Error;
 use std::sync::Arc;
 use tower_sessions::{MemoryStore, SessionManagerLayer};
+use clickup_time_in_status_analyzer::routes::session::put_workspace;
+use axum::routing::put;
+use clickup_time_in_status_analyzer::routes::pages::home;
 
 // static TASK: &str = "86aea18zr";
 // static TASK: &str = "86a8jcehg";
@@ -39,7 +42,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .route("/api/v1/health", get(health))
         .route("/login", get(login))
         .route("/oauth/redirect", get(oauth_redirect))
-        .route("/workspaces", get(workspaces))
+        .route("/home", get(home))
+        .route("/session/workspace", put(put_workspace))
         .layer(session_layer)
         .with_state(app_state);
 

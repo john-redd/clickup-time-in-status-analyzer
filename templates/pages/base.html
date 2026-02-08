@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}{{ title }}{% endblock %}</title>
+  {% block head %}{% endblock %}
+</head>
+
+<body>
+  <header>
+    <label for="workspace_id">Choose a Workspace:</label>
+    <select name="workspace_id" id="workspace_id">
+      {% for workspace in workspaces %}
+      <option value="{{ workspace.id }}">{{ workspace.name }}</option>
+      {% endfor %}
+    </select>
+  </header>
+  <div id="content">
+    {% block content %}{% endblock %}
+  </div>
+  <footer>
+  </footer
+</body>
+
+</html>
