@@ -13,7 +13,14 @@ path = "src/main.rs"
 name = "clickup_time_in_status_analyzer"
 
 [dependencies]
+askama = "0.15.4"
+async-recursion = "1.1.1"
+axum = { version = "0.8.6", features = ["macros"] }
 chrono = { version = "0.4.43", features = ["serde"] }
 reqwest = { version = "0.13.1", features = ["blocking", "json", "query"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
+tokio = { version = "1.49.0", features = ["full"] }
+tower-sessions = "0.14.0"
+tower-sessions-redis-store = "0.16.0"
+url = "2.5.8"

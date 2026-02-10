@@ -1,184 +1,300 @@
 use crate::services::clickup::{ClickUpTaskResponseBody, ClickUpTimeInStatusResponseBody};
-use chrono::{DateTime, Datelike, Duration, Utc};
-use reqwest::header::HeaderValue;
-use std::{
-    sync::mpsc::{self, Receiver, Sender},
-    thread,
-};
+use async_recursion::async_recursion;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::error::Error;
+use tokio::{join, task::JoinSet};
 
 pub static IN_PROGRESS_ORDER_INDEX: i32 = 5;
 
 #[derive(Clone)]
 pub struct ClickUpService {
     base_url: String,
-    http_client: reqwest::blocking::Client,
-    std_headers: reqwest::header::HeaderMap,
+    http_client: reqwest::Client,
+    client_id: String,
+    client_secret: String,
+    redirect_uri: String,
+}
+
+#[derive(Debug)]
+pub enum ClickUpServiceError {
+    FailedToSendNetworkRequestError(Box<dyn Error + Send + 'static>),
+    ParseError(Box<dyn Error + Send + 'static>, Option<String>),
+    UnexpectedError,
 }
 
 impl ClickUpService {
-    pub fn new(token: String) -> Self {
-        let mut headers = reqwest::header::HeaderMap::new();
-        headers.append(
-            reqwest::header::ACCEPT,
-            HeaderValue::from_str("application/json").unwrap(),
-        );
-        headers.append(
-            reqwest::header::CONTENT_TYPE,
-            HeaderValue::from_str("application/json").unwrap(),
-        );
-        headers.append(
-            reqwest::header::AUTHORIZATION,
-            HeaderValue::from_str(token.as_str()).unwrap(),
-        );
+    pub fn new(client_id: &str, client_secret: &str, redirect_uri: &str) -> Self {
         Self {
             base_url: "https://api.clickup.com".to_string(),
-            http_client: reqwest::blocking::Client::new(),
-            std_headers: headers,
+            http_client: reqwest::Client::new(),
+            client_id: client_id.to_string(),
+            client_secret: client_secret.to_string(),
+            redirect_uri: redirect_uri.to_string(),
         }
     }
 
-    fn get_task_time_in_status(&self, task_id: &str) -> ClickUpTimeInStatusResponseBody {
+    async fn get_task_time_in_status(
+        &self,
+        token: &str,
+        task_id: &str,
+    ) -> Result<ClickUpTimeInStatusResponseBody, ClickUpServiceError> {
         let url = format!("{}/api/v2/task/{task_id}/time_in_status", self.base_url);
-        let response = self
+        let response = match self
             .http_client
             .get(url)
-            .headers(self.std_headers.clone())
-            .send();
+            .header(reqwest::header::ACCEPT, "application/json")
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"))
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(e) => {
+                return Err(ClickUpServiceError::FailedToSendNetworkRequestError(
+                    Box::new(e),
+                ));
+            }
+        };
 
-        response
-            .unwrap()
-            .json::<ClickUpTimeInStatusResponseBody>()
-            .unwrap()
+        let text = match response.text().await {
+            Ok(text) => text,
+            Err(e) => return Err(ClickUpServiceError::ParseError(Box::new(e), None)),
+        };
+
+        match serde_json::from_str::<ClickUpTimeInStatusResponseBody>(&text) {
+            Ok(v) => Ok(v),
+            Err(e) => Err(ClickUpServiceError::ParseError(
+                Box::new(e),
+                Some(format!("get_task_time_in_status {text}")),
+            )),
+        }
     }
 
-    pub fn get_task(&self, task_id: &str) -> ClickUpTaskResponseBody {
+    #[async_recursion]
+    pub async fn get_task(
+        &self,
+        token: &str,
+        task_id: &str,
+    ) -> Result<ClickUpTaskResponseBody, ClickUpServiceError> {
         let url = format!("{}/api/v2/task/{task_id}", self.base_url);
-        let response = self
-            .http_client
-            .get(url)
-            .headers(self.std_headers.clone())
-            .query(&[("include_subtasks", "true")])
-            .send();
+        println!("token: {token}");
+        let task_future = async {
+            let request = self
+                .http_client
+                .get(url)
+                .header(reqwest::header::ACCEPT, "application/json")
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"))
+                .query(&[("include_subtasks", "true")]);
 
-        let mut task = response.unwrap().json::<ClickUpTaskResponseBody>().unwrap();
-        let task_time_in_status = self.get_task_time_in_status(task_id);
+            dbg!(&request);
+            let response = match request.send().await {
+                Ok(response) => response,
+                Err(e) => {
+                    return Err(ClickUpServiceError::FailedToSendNetworkRequestError(
+                        Box::new(e),
+                    ));
+                }
+            };
+
+            let status_code = response.status();
+
+            let text = match response.text().await {
+                Ok(text) => text,
+                Err(e) => return Err(ClickUpServiceError::ParseError(Box::new(e), None)),
+            };
+
+            let task = match serde_json::from_str::<ClickUpTaskResponseBody>(&text) {
+                Ok(task) => task,
+                Err(e) => {
+                    return Err(ClickUpServiceError::ParseError(
+                        Box::new(e),
+                        Some(format!("get_task = {status_code} {text}")),
+                    ));
+                }
+            };
+
+            Ok(task)
+        };
+
+        let task_time_in_status_future = self.get_task_time_in_status(token, task_id);
+
+        let (task, task_time_in_status) = join!(task_future, task_time_in_status_future);
+
+        let mut task = task?;
+        let task_time_in_status = task_time_in_status?;
+
+        println!("here");
+
         task.time_in_status = Some(task_time_in_status);
-
-        let mut children = vec![];
 
         if let ClickUpTaskResponseBody {
             sub_tasks: Some(sub_tasks),
             ..
         } = &mut task
         {
-            let (tx, rx): (
-                Sender<ClickUpTaskResponseBody>,
-                Receiver<ClickUpTaskResponseBody>,
-            ) = mpsc::channel();
+            let mut requests = JoinSet::new();
             for sub_task_record in &mut *sub_tasks {
-                let thread_tx = tx.clone();
                 let sub_task_id = sub_task_record.id.clone();
                 let app_clone = self.clone();
-                let child = thread::spawn(move || {
-                    let sub_task = app_clone.get_task(&sub_task_id);
-                    thread_tx.send(sub_task).unwrap();
-                });
-                children.push(child);
+                let token_clone = token.to_string();
+                requests.spawn(async move { app_clone.get_task(&token_clone, &sub_task_id).await });
             }
 
-            for _ in 0..sub_tasks.len() {
-                let fetched_sub_task = rx.recv().unwrap();
+            while let Some(request) = requests.join_next().await {
+                let fetched_sub_task = match request {
+                    Ok(Ok(fetched_sub_task)) => fetched_sub_task,
+                    // This could be improved to collect all errors then return instead of returing
+                    // at the first one.
+                    Ok(Err(e)) => return Err(e),
+                    Err(_) => return Err(ClickUpServiceError::UnexpectedError),
+                };
 
-                let position_of_sub_task = sub_tasks
+                let position_of_sub_task = match sub_tasks
                     .iter()
                     .position(|sub_task| fetched_sub_task.id == sub_task.id)
-                    .unwrap();
-                let sub_task = sub_tasks.get_mut(position_of_sub_task).unwrap();
+                {
+                    Some(p) => p,
+                    None => return Err(ClickUpServiceError::UnexpectedError),
+                };
+                let sub_task = match sub_tasks.get_mut(position_of_sub_task) {
+                    Some(sub_task) => sub_task,
+                    None => return Err(ClickUpServiceError::UnexpectedError),
+                };
                 sub_task.task = Some(fetched_sub_task);
-            }
-
-            for child in children {
-                child.join().expect("oops! the child thread panicked");
             }
         };
 
-        task
+        Ok(task)
     }
-}
 
-pub fn generate_points_vs_time_spent_analysis(task: &ClickUpTaskResponseBody) -> String {
-    fn generate_points_vs_time_spent_analysis_iter(
-        task: &ClickUpTaskResponseBody,
-        mut prefix: String,
-    ) -> String {
-        let points = get_sprint_points(task);
-        let time_in_status_count = get_days_in_dev_status(task);
-
-        let mut result = format!(
-            "\n{prefix}{} - points: {points}, time_spent: {time_in_status_count}",
-            task.custom_id
-        );
-
-        prefix.push('\t');
-
-        if let Some(sub_tasks) = &task.sub_tasks {
-            for sub_task in sub_tasks {
-                if let Some(next_task) = &sub_task.task {
-                    let nested_result =
-                        generate_points_vs_time_spent_analysis_iter(next_task, prefix.clone());
-                    result.push_str(&nested_result);
-                }
-            }
+    pub fn generate_oauth_login_redirect_url(&self) -> Result<url::Url, ClickUpServiceError> {
+        match url::Url::parse_with_params(
+            "https://app.clickup.com/api",
+            &[
+                ("client_id", self.client_id.clone()),
+                ("redirect_uri", self.redirect_uri.clone()),
+            ],
+        ) {
+            Ok(url) => Ok(url),
+            Err(_) => Err(ClickUpServiceError::UnexpectedError),
         }
-
-        result
     }
 
-    generate_points_vs_time_spent_analysis_iter(task, "".to_string())
-}
-
-fn get_sprint_points(task: &ClickUpTaskResponseBody) -> f32 {
-    task.points.unwrap_or_default()
-}
-
-fn get_days_in_dev_status(task: &ClickUpTaskResponseBody) -> i64 {
-    let mut initial_dev_status_start: Option<DateTime<Utc>> = None;
-
-    let total = task
-        .time_in_status
-        .as_ref()
-        .unwrap()
-        .status_history
-        .iter()
-        .filter_map(|s| match &s.order_index {
-            Some(order_index) => {
-                if *order_index >= IN_PROGRESS_ORDER_INDEX {
-                    initial_dev_status_start = Some(s.total_time.since);
-                    Some(s.total_time.by_minute / 60 / 24)
-                } else {
-                    None
-                }
+    pub async fn post_oauth_token(
+        &self,
+        code: String,
+    ) -> Result<ClickUpOauthTokenResponseBody, ClickUpServiceError> {
+        let url = format!("{}/api/v2/oauth/token", self.base_url);
+        let response = match self
+            .http_client
+            .post(url)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .json(&json!({
+                "client_id": self.client_id,
+                "client_secret": self.client_secret,
+                "code": code,
+            }))
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(e) => {
+                return Err(ClickUpServiceError::FailedToSendNetworkRequestError(
+                    Box::new(e),
+                ));
             }
-            None => None,
-        })
-        .reduce(|acc, n| acc + n)
-        .unwrap_or_default();
+        };
 
-    match initial_dev_status_start {
-        Some(mut cursor) => {
-            let now = cursor + Duration::days(total);
-            let mut days_to_ignore = 0;
-
-            while cursor < now {
-                match cursor.weekday() {
-                    chrono::Weekday::Sat | chrono::Weekday::Sun => days_to_ignore += 1,
-                    _ => {}
-                }
-                cursor += Duration::days(1);
+        let text = match response.text().await {
+            Ok(text) => text,
+            Err(e) => {
+                return Err(ClickUpServiceError::ParseError(Box::new(e), None));
             }
+        };
 
-            total - days_to_ignore
-        }
-        None => total,
+        let body = match serde_json::from_str::<ClickUpOauthTokenResponseBody>(&text) {
+            Ok(body) => body,
+            Err(e) => return Err(ClickUpServiceError::ParseError(Box::new(e), Some(text))),
+        };
+
+        Ok(body)
     }
+
+    pub async fn get_authorized_workspaces(
+        &self,
+        token: String,
+    ) -> Result<ClickUpGetWorkspacesResponseBody, ClickUpServiceError> {
+        let url = format!("{}/api/v2/team", self.base_url);
+        let request = self
+            .http_client
+            .get(url)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"));
+        dbg!(&request);
+        let response = match
+            request
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(e) => {
+                return Err(ClickUpServiceError::FailedToSendNetworkRequestError(
+                    Box::new(e),
+                ));
+            }
+        };
+
+        let text = match response.text().await {
+            Ok(text) => text,
+            Err(e) => {
+                return Err(ClickUpServiceError::ParseError(Box::new(e), None));
+            }
+        };
+
+        let body = match serde_json::from_str::<ClickUpGetWorkspacesResponseBody>(&text) {
+            Ok(body) => body,
+            Err(e) => {
+                return Err(ClickUpServiceError::ParseError(Box::new(e), Some(text)));
+            }
+        };
+
+        Ok(body)
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ClickUpOauthTokenResponseBody {
+    pub access_token: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ClickUpGetWorkspacesResponseBody {
+    pub teams: Vec<ClickUpWorkspace>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ClickUpWorkspace {
+    pub id: String,
+    pub name: String,
+    pub color: String,
+    pub avatar: Option<String>,
+    pub members: Vec<ClickUpWorkspaceMember>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ClickUpWorkspaceMember {
+    pub user: ClickUpWorkspaceUser,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ClickUpWorkspaceUser {
+    pub id: i32,
+    pub username: String,
+    pub color: Option<String>,
+    #[serde(rename = "profilePicture")]
+    pub profile_picture: Option<String>,
 }
