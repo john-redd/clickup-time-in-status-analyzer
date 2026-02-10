@@ -64,8 +64,9 @@ impl From<ClickUpTaskResponseBody> for Ticket {
 pub fn generate_points_vs_time_spent_analysis(task: &Ticket) -> String {
     fn generate_points_vs_time_spent_analysis_iter(task: &Ticket, mut prefix: String) -> String {
         let mut result = format!(
-            "\n{prefix}{} - points: {} ({}), time_spent: {} ({})",
+            "\n{prefix}{} {} - points: {} ({}), time_spent: {} ({})",
             task.number,
+            task.name,
             task.points,
             task.total_points,
             task.time_in_dev_status,
