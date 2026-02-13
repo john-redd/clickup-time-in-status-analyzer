@@ -3,7 +3,7 @@ use async_recursion::async_recursion;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::error::Error;
-use tokio::join;
+use tokio::{join, task::JoinSet};
 
 pub static IN_PROGRESS_ORDER_INDEX: i32 = 5;
 
@@ -39,7 +39,7 @@ impl ClickUpService {
         token: &str,
         task_id: &str,
     ) -> Result<ClickUpTaskResponseBody, ClickUpServiceError> {
-        get_task_tree(&self.http_client, &self.base_url, token, task_id).await
+        get_task_tree2(&self.http_client, &self.base_url, token, task_id).await
     }
 
     pub fn generate_oauth_login_redirect_url(&self) -> Result<url::Url, ClickUpServiceError> {
@@ -185,6 +185,59 @@ async fn get_task_tree(
         for sub_task_record in &mut *sub_tasks {
             let task = get_task_tree(http_client, base_url, token, &sub_task_record.id).await?;
             sub_task_record.task = Some(task)
+        }
+    };
+
+    Ok(task)
+}
+
+#[async_recursion]
+async fn get_task_tree2(
+    http_client: &reqwest::Client,
+    base_url: &str,
+    token: &str,
+    task_id: &str,
+) -> Result<ClickUpTaskResponseBody, ClickUpServiceError> {
+    let mut task = get_task(http_client, base_url, token, task_id).await?;
+
+    if let ClickUpTaskResponseBody {
+        sub_tasks: Some(sub_tasks),
+        ..
+    } = &mut task
+    {
+        let mut requests = JoinSet::new();
+        for (i, sub_task_record) in sub_tasks.iter().enumerate() {
+            let http_client_clone = http_client.clone();
+            let base_url_clone = base_url.to_string();
+            let token_clone = token.to_string();
+            let sub_task_id = sub_task_record.id.clone();
+            requests.spawn(async move {
+                let task = get_task_tree2(
+                    &http_client_clone,
+                    &base_url_clone,
+                    &token_clone,
+                    &sub_task_id,
+                )
+                .await;
+
+                (i, task)
+            });
+        }
+
+        while let Some(join_set_result) = requests.join_next().await {
+            let (i, sub_task_request) = match join_set_result {
+                Ok((i, sub_task_request)) => (i, sub_task_request),
+                Err(_) => return Err(ClickUpServiceError::UnexpectedError),
+            };
+
+            let task = match sub_task_request {
+                Ok(task) => task,
+                Err(e) => return Err(e),
+            };
+
+            if let Some(sub_task) = sub_tasks.get_mut(i) {
+                sub_task.task = Some(task);
+            };
         }
     };
 
