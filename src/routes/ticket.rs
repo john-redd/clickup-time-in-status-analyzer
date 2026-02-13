@@ -28,8 +28,6 @@ pub async fn ticket(
         }
     };
 
-    println!("{}", token);
-
     let task = match app_state
         .click_up_service
         .get_task(&token, &body.ticket_id)
@@ -37,7 +35,6 @@ pub async fn ticket(
     {
         Ok(task) => task,
         Err(e) => {
-            println!("{:?}",e);
             return (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error.").into_response();
         }
     };
