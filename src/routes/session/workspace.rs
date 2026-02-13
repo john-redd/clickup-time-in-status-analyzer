@@ -49,7 +49,6 @@ pub async fn put_workspace(
             })
             .collect(),
         Err(e) => {
-            println!("{:?}", e);
             return (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response();
         }
     };

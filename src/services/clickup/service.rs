@@ -3,7 +3,8 @@ use async_recursion::async_recursion;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::error::Error;
-use tokio::{join, task::JoinSet};
+use tokio::{join, task::JoinSet, time::Instant};
+use futures::StreamExt;
 
 pub static IN_PROGRESS_ORDER_INDEX: i32 = 5;
 
@@ -39,7 +40,25 @@ impl ClickUpService {
         token: &str,
         task_id: &str,
     ) -> Result<ClickUpTaskResponseBody, ClickUpServiceError> {
-        get_task_tree2(&self.http_client, &self.base_url, token, task_id).await
+        let start = Instant::now();
+        let _ = get_task_tree(&self.http_client, &self.base_url, token, task_id).await;
+        let duration = start.elapsed();
+
+        println!("sequential awaits: {duration:?}");
+
+        let start = Instant::now();
+        let _ = get_task_tree_join_set(&self.http_client, &self.base_url, token, task_id).await;
+        let duration = start.elapsed();
+
+        println!("join_set: {duration:?}");
+
+        let start = Instant::now();
+        let result = get_task_tree_futures_unordered(&self.http_client, &self.base_url, token, task_id).await;
+        let duration = start.elapsed();
+
+        println!("futures_unordered: {duration:?}");
+
+        result
     }
 
     pub fn generate_oauth_login_redirect_url(&self) -> Result<url::Url, ClickUpServiceError> {
@@ -107,7 +126,6 @@ impl ClickUpService {
             .header(reqwest::header::ACCEPT, "application/json")
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"));
-        dbg!(&request);
         let response = match request.send().await {
             Ok(response) => response,
             Err(e) => {
@@ -183,6 +201,7 @@ async fn get_task_tree(
     } = &mut task
     {
         for sub_task_record in &mut *sub_tasks {
+            // Naive and doesn't actually work the futures in parallel.
             let task = get_task_tree(http_client, base_url, token, &sub_task_record.id).await?;
             sub_task_record.task = Some(task)
         }
@@ -192,7 +211,7 @@ async fn get_task_tree(
 }
 
 #[async_recursion]
-async fn get_task_tree2(
+async fn get_task_tree_join_set(
     http_client: &reqwest::Client,
     base_url: &str,
     token: &str,
@@ -212,7 +231,7 @@ async fn get_task_tree2(
             let token_clone = token.to_string();
             let sub_task_id = sub_task_record.id.clone();
             requests.spawn(async move {
-                let task = get_task_tree2(
+                let task = get_task_tree_join_set(
                     &http_client_clone,
                     &base_url_clone,
                     &token_clone,
@@ -244,6 +263,51 @@ async fn get_task_tree2(
     Ok(task)
 }
 
+#[async_recursion]
+async fn get_task_tree_futures_unordered(
+    http_client: &reqwest::Client,
+    base_url: &str,
+    token: &str,
+    task_id: &str,
+) -> Result<ClickUpTaskResponseBody, ClickUpServiceError> {
+    let mut task = get_task(http_client, base_url, token, task_id).await?;
+
+    if let ClickUpTaskResponseBody {
+        sub_tasks: Some(sub_tasks),
+        ..
+    } = &mut task
+    {
+        let mut requests = futures::stream::FuturesUnordered::new();
+        for (i, sub_task_record) in sub_tasks.iter().enumerate() {
+            let sub_task_id = sub_task_record.id.clone();
+            requests.push(async move {
+                let task = get_task_tree_join_set(
+                    http_client,
+                    base_url,
+                    token,
+                    &sub_task_id,
+                )
+                .await;
+
+                (i, task)
+            });
+        }
+
+        while let Some((i, sub_task_request)) = requests.next().await {
+            let task = match sub_task_request {
+                Ok(task) => task,
+                Err(e) => return Err(e),
+            };
+
+            if let Some(sub_task) = sub_tasks.get_mut(i) {
+                sub_task.task = Some(task);
+            };
+        }
+    };
+
+    Ok(task)
+}
+
 pub async fn get_task(
     http_client: &reqwest::Client,
     base_url: &str,
@@ -251,7 +315,6 @@ pub async fn get_task(
     task_id: &str,
 ) -> Result<ClickUpTaskResponseBody, ClickUpServiceError> {
     let url = format!("{base_url}/api/v2/task/{task_id}");
-    println!("token: {token}");
     let task_future = async {
         let request = http_client
             .get(url)
@@ -260,7 +323,6 @@ pub async fn get_task(
             .header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"))
             .query(&[("include_subtasks", "true")]);
 
-        dbg!(&request);
         let response = match request.send().await {
             Ok(response) => response,
             Err(e) => {
