@@ -200,10 +200,28 @@ async fn get_task_tree(
         ..
     } = &mut task
     {
-        for sub_task_record in &mut *sub_tasks {
+        let mut requests = vec![];
+        for (i, sub_task_record) in sub_tasks.iter().enumerate() {
             // Naive and doesn't actually work the futures in parallel.
-            let task = get_task_tree(http_client, base_url, token, &sub_task_record.id).await?;
-            sub_task_record.task = Some(task)
+            let sub_task_id = sub_task_record.id.clone();
+            requests.push(async move {
+                let task = get_task_tree(http_client, base_url, token, &sub_task_id).await;
+
+                (i, task)
+            });
+        }
+
+        for request in requests {
+            let (i, sub_task_request) = request.await;
+
+            let task = match sub_task_request {
+                Ok(task) => task,
+                Err(e) => return Err(e),
+            };
+
+            if let Some(sub_task) = sub_tasks.get_mut(i) {
+                sub_task.task = Some(task);
+            };
         }
     };
 
