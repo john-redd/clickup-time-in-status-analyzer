@@ -4,17 +4,17 @@ use crate::services::clickup::{ClickUpTaskResponseBody, IN_PROGRESS_ORDER_INDEX}
 use chrono::{DateTime, Utc};
 
 #[derive(Debug)]
-pub struct Ticket {
+pub struct Task {
     number: String,
     name: String,
     points: f32,
     total_points: f32,
     time_in_dev_status: i64,
     total_time_in_dev_status: i64,
-    sub_tickets: Vec<Ticket>,
+    sub_tasks: Vec<Task>,
 }
 
-impl From<ClickUpTaskResponseBody> for Ticket {
+impl From<ClickUpTaskResponseBody> for Task {
     fn from(value: ClickUpTaskResponseBody) -> Self {
         let time_in_dev_status = get_days_in_dev_status(&value);
 
@@ -29,12 +29,12 @@ impl From<ClickUpTaskResponseBody> for Ticket {
             None => 0,
         } + time_in_dev_status;
 
-        let sub_tickets: Vec<Ticket> = match value.sub_tasks {
-            Some(sub_tickets) => sub_tickets
+        let sub_tasks: Vec<Task> = match value.sub_tasks {
+            Some(sub_tasks) => sub_tasks
                 .iter()
                 .filter_map(|t| {
                     if let Some(sub_task) = &t.task {
-                        return Some(Ticket::from(sub_task.to_owned()));
+                        return Some(Task::from(sub_task.to_owned()));
                     }
 
                     None
@@ -45,24 +45,29 @@ impl From<ClickUpTaskResponseBody> for Ticket {
 
         let points = value.points.unwrap_or_default();
 
-        let total_points = sub_tickets
+        let total_points = sub_tasks
             .iter()
             .fold(points, |acc, t| acc + t.total_points);
 
+        let number = match value.custom_id {
+            Some(number) => number,
+            None => value.id,
+        };
+
         Self {
-            number: value.custom_id,
+            number,
             name: value.name,
             points,
             total_points,
             time_in_dev_status,
             total_time_in_dev_status,
-            sub_tickets,
+            sub_tasks,
         }
     }
 }
 
-pub fn generate_points_vs_time_spent_analysis(task: &Ticket) -> String {
-    fn generate_points_vs_time_spent_analysis_iter(task: &Ticket, mut prefix: String) -> String {
+pub fn generate_points_vs_time_spent_analysis(task: &Task) -> String {
+    fn generate_points_vs_time_spent_analysis_iter(task: &Task, mut prefix: String) -> String {
         let mut result = format!(
             "\n{prefix}{} {} - points: {} ({}), time_spent: {} ({})",
             task.number,
@@ -75,7 +80,7 @@ pub fn generate_points_vs_time_spent_analysis(task: &Ticket) -> String {
 
         prefix.push('\t');
 
-        for sub_task in &task.sub_tickets {
+        for sub_task in &task.sub_tasks {
             let nested_result =
                 generate_points_vs_time_spent_analysis_iter(sub_task, prefix.clone());
             result.push_str(&nested_result);

@@ -43,7 +43,7 @@ where
 #[derive(Debug, Deserialize, Clone)]
 pub struct ClickUpTaskResponseBody {
     pub id: String,
-    pub custom_id: String,
+    pub custom_id: Option<String>,
     pub name: String,
     pub text_content: String,
     pub description: String,
@@ -59,7 +59,7 @@ pub struct ClickUpTaskResponseBody {
 pub struct SubTask {
     pub id: String,
     pub task: Option<ClickUpTaskResponseBody>, // Not actually part of response
-    pub custom_id: String,
+    pub custom_id: Option<String>,
     pub name: String,
     pub points: Option<f32>,
     #[serde(deserialize_with = "ts_milliseconds_string")]

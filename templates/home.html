@@ -8,11 +8,11 @@
 {% endblock %}
 
 {% block content %}
-<label for="ticket_id">Input Ticket ID:</label>
+<label for="task_id">Input Task ID:</label>
 <input
-  id="ticket_id"
-  name="ticket_id"
-  hx-get="/ticket"
-  hx-target="#ticket_evaluation" />
-<div id="ticket_evaluation"></div>
+  id="task_id"
+  name="task_id"
+  hx-get="/task"
+  hx-target="#task_evaluation" />
+<div id="task_evaluation"></div>
 {% endblock %}

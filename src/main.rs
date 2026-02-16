@@ -3,7 +3,7 @@ use axum::{Router, routing::get, serve};
 use clickup_time_in_status_analyzer::AppState;
 use clickup_time_in_status_analyzer::routes::pages::home;
 use clickup_time_in_status_analyzer::routes::session::put_workspace;
-use clickup_time_in_status_analyzer::routes::{health, login, oauth_redirect, ticket};
+use clickup_time_in_status_analyzer::routes::{health, login, oauth_redirect, task};
 use clickup_time_in_status_analyzer::services::clickup::ClickUpService;
 use std::error::Error;
 use std::sync::Arc;
@@ -50,7 +50,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .route("/login", get(login))
         .route("/oauth/redirect", get(oauth_redirect))
         .route("/home", get(home))
-        .route("/ticket", get(ticket))
+        .route("/task", get(task))
         .route("/session/workspace", put(put_workspace))
         .layer(session_layer)
         .with_state(app_state);

@@ -1,12 +1,14 @@
 use crate::services::clickup::{ClickUpTaskResponseBody, ClickUpTimeInStatusResponseBody};
 use async_recursion::async_recursion;
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::error::Error;
 use tokio::{join, task::JoinSet, time::Instant};
-use futures::StreamExt;
 
 pub static IN_PROGRESS_ORDER_INDEX: i32 = 5;
+
+const TIME_IN_STATUS_NOT_ENABLED_ERROR_CODE: &str = "TIS_027";
 
 #[derive(Clone)]
 pub struct ClickUpService {
@@ -22,6 +24,7 @@ pub enum ClickUpServiceError {
     FailedToSendNetworkRequestError(Box<dyn Error + Send + 'static>),
     ParseError(Box<dyn Error + Send + 'static>, Option<String>),
     UnexpectedError,
+    TimeInStatusNotEnabled,
 }
 
 impl ClickUpService {
@@ -53,10 +56,17 @@ impl ClickUpService {
         println!("join_set: {duration:?}");
 
         let start = Instant::now();
-        let result = get_task_tree_futures_unordered(&self.http_client, &self.base_url, token, task_id).await;
+        let _ = get_task_tree_futures_unordered(&self.http_client, &self.base_url, token, task_id)
+            .await;
         let duration = start.elapsed();
 
         println!("futures_unordered: {duration:?}");
+
+        let start = Instant::now();
+        let result = get_task_channels(&self.http_client, &self.base_url, token, task_id).await;
+        let duration = start.elapsed();
+
+        println!("channels: {duration:?}");
 
         result
     }
@@ -299,19 +309,62 @@ async fn get_task_tree_futures_unordered(
         for (i, sub_task_record) in sub_tasks.iter().enumerate() {
             let sub_task_id = sub_task_record.id.clone();
             requests.push(async move {
-                let task = get_task_tree_join_set(
-                    http_client,
-                    base_url,
-                    token,
-                    &sub_task_id,
-                )
-                .await;
+                let task = get_task_tree_join_set(http_client, base_url, token, &sub_task_id).await;
 
                 (i, task)
             });
         }
 
         while let Some((i, sub_task_request)) = requests.next().await {
+            let task = match sub_task_request {
+                Ok(task) => task,
+                Err(e) => return Err(e),
+            };
+
+            if let Some(sub_task) = sub_tasks.get_mut(i) {
+                sub_task.task = Some(task);
+            };
+        }
+    };
+
+    Ok(task)
+}
+
+#[async_recursion]
+async fn get_task_channels(
+    http_client: &reqwest::Client,
+    base_url: &str,
+    token: &str,
+    task_id: &str,
+) -> Result<ClickUpTaskResponseBody, ClickUpServiceError> {
+    let mut task = get_task(http_client, base_url, token, task_id).await?;
+
+    if let ClickUpTaskResponseBody {
+        sub_tasks: Some(sub_tasks),
+        ..
+    } = &mut task
+    {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        for (i, sub_task_record) in sub_tasks.iter().enumerate() {
+            let http_client_clone = http_client.clone();
+            let base_url_clone = base_url.to_string();
+            let token_clone = token.to_string();
+            let sub_task_id = sub_task_record.id.clone();
+            let tx_clone = tx.clone();
+            std::thread::spawn(async move || {
+                let task = get_task_tree_join_set(
+                    &http_client_clone,
+                    &base_url_clone,
+                    &token_clone,
+                    &sub_task_id,
+                )
+                .await;
+
+                let _ = tx_clone.send((i, task));
+            });
+        }
+
+        while let Some((i, sub_task_request)) = rx.recv().await {
             let task = match sub_task_request {
                 Ok(task) => task,
                 Err(e) => return Err(e),
@@ -412,9 +465,15 @@ async fn get_task_time_in_status(
 
     match serde_json::from_str::<ClickUpTimeInStatusResponseBody>(&text) {
         Ok(v) => Ok(v),
-        Err(e) => Err(ClickUpServiceError::ParseError(
-            Box::new(e),
-            Some(format!("get_task_time_in_status {text}")),
-        )),
+        Err(e) => {
+            if text.contains(TIME_IN_STATUS_NOT_ENABLED_ERROR_CODE) {
+                Err(ClickUpServiceError::TimeInStatusNotEnabled)
+            } else {
+                Err(ClickUpServiceError::ParseError(
+                    Box::new(e),
+                    Some(format!("get_task_time_in_status {text}")),
+                ))
+            }
+        }
     }
 }
