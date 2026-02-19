@@ -35,7 +35,6 @@ pub async fn home(session: Session, State(app_state): State<AppState>) -> impl I
             })
             .collect(),
         Err(e) => {
-            println!("{:?}", e);
             return (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response();
         }
     };
