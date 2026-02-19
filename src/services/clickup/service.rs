@@ -9,6 +9,7 @@ use tokio::{join, task::JoinSet, time::Instant};
 pub static IN_PROGRESS_ORDER_INDEX: i32 = 5;
 
 const TIME_IN_STATUS_NOT_ENABLED_ERROR_CODE: &str = "TIS_027";
+const NOT_AUTHORIZED_ERROR_CODE: &str = "OAUTH_018";
 
 #[derive(Clone)]
 pub struct ClickUpService {
@@ -25,6 +26,13 @@ pub enum ClickUpServiceError {
     ParseError(Box<dyn Error + Send + 'static>, Option<String>),
     UnexpectedError,
     TimeInStatusNotEnabled,
+    CustomIDError,
+}
+
+#[derive(Clone)]
+pub struct GetTaskRequest {
+    pub task_id: String,
+    pub workspace_id: Option<String>,
 }
 
 impl ClickUpService {
@@ -41,34 +49,15 @@ impl ClickUpService {
     pub async fn get_task(
         &self,
         token: &str,
-        task_id: &str,
+        mut request_config: GetTaskRequest,
     ) -> Result<ClickUpTaskResponseBody, ClickUpServiceError> {
-        let start = Instant::now();
-        let _ = get_task_tree(&self.http_client, &self.base_url, token, task_id).await;
-        let duration = start.elapsed();
-
-        println!("sequential awaits: {duration:?}");
-
-        let start = Instant::now();
-        let _ = get_task_tree_join_set(&self.http_client, &self.base_url, token, task_id).await;
-        let duration = start.elapsed();
-
-        println!("join_set: {duration:?}");
-
-        let start = Instant::now();
-        let _ = get_task_tree_futures_unordered(&self.http_client, &self.base_url, token, task_id)
-            .await;
-        let duration = start.elapsed();
-
-        println!("futures_unordered: {duration:?}");
-
-        let start = Instant::now();
-        let result = get_task_channels(&self.http_client, &self.base_url, token, task_id).await;
-        let duration = start.elapsed();
-
-        println!("channels: {duration:?}");
-
-        result
+        get_task_tree(
+            &self.http_client,
+            &self.base_url,
+            token,
+            &mut request_config,
+        )
+        .await
     }
 
     pub fn generate_oauth_login_redirect_url(&self) -> Result<url::Url, ClickUpServiceError> {
@@ -201,104 +190,9 @@ async fn get_task_tree(
     http_client: &reqwest::Client,
     base_url: &str,
     token: &str,
-    task_id: &str,
+    request_config: &mut GetTaskRequest,
 ) -> Result<ClickUpTaskResponseBody, ClickUpServiceError> {
-    let mut task = get_task(http_client, base_url, token, task_id).await?;
-
-    if let ClickUpTaskResponseBody {
-        sub_tasks: Some(sub_tasks),
-        ..
-    } = &mut task
-    {
-        let mut requests = vec![];
-        for (i, sub_task_record) in sub_tasks.iter().enumerate() {
-            // Naive and doesn't actually work the futures in parallel.
-            let sub_task_id = sub_task_record.id.clone();
-            requests.push(async move {
-                let task = get_task_tree(http_client, base_url, token, &sub_task_id).await;
-
-                (i, task)
-            });
-        }
-
-        for request in requests {
-            let (i, sub_task_request) = request.await;
-
-            let task = match sub_task_request {
-                Ok(task) => task,
-                Err(e) => return Err(e),
-            };
-
-            if let Some(sub_task) = sub_tasks.get_mut(i) {
-                sub_task.task = Some(task);
-            };
-        }
-    };
-
-    Ok(task)
-}
-
-#[async_recursion]
-async fn get_task_tree_join_set(
-    http_client: &reqwest::Client,
-    base_url: &str,
-    token: &str,
-    task_id: &str,
-) -> Result<ClickUpTaskResponseBody, ClickUpServiceError> {
-    let mut task = get_task(http_client, base_url, token, task_id).await?;
-
-    if let ClickUpTaskResponseBody {
-        sub_tasks: Some(sub_tasks),
-        ..
-    } = &mut task
-    {
-        let mut requests = JoinSet::new();
-        for (i, sub_task_record) in sub_tasks.iter().enumerate() {
-            let http_client_clone = http_client.clone();
-            let base_url_clone = base_url.to_string();
-            let token_clone = token.to_string();
-            let sub_task_id = sub_task_record.id.clone();
-            requests.spawn(async move {
-                let task = get_task_tree_join_set(
-                    &http_client_clone,
-                    &base_url_clone,
-                    &token_clone,
-                    &sub_task_id,
-                )
-                .await;
-
-                (i, task)
-            });
-        }
-
-        while let Some(join_set_result) = requests.join_next().await {
-            let (i, sub_task_request) = match join_set_result {
-                Ok((i, sub_task_request)) => (i, sub_task_request),
-                Err(_) => return Err(ClickUpServiceError::UnexpectedError),
-            };
-
-            let task = match sub_task_request {
-                Ok(task) => task,
-                Err(e) => return Err(e),
-            };
-
-            if let Some(sub_task) = sub_tasks.get_mut(i) {
-                sub_task.task = Some(task);
-            };
-        }
-    };
-
-    Ok(task)
-}
-
-#[async_recursion]
-async fn get_task_tree_futures_unordered(
-    http_client: &reqwest::Client,
-    base_url: &str,
-    token: &str,
-    task_id: &str,
-) -> Result<ClickUpTaskResponseBody, ClickUpServiceError> {
-    let mut task = get_task(http_client, base_url, token, task_id).await?;
+    let mut task = get_task(http_client, base_url, token, &request_config.clone()).await?;
 
     if let ClickUpTaskResponseBody {
         sub_tasks: Some(sub_tasks),
@@ -308,8 +202,11 @@ async fn get_task_tree_futures_unordered(
         let mut requests = futures::stream::FuturesUnordered::new();
         for (i, sub_task_record) in sub_tasks.iter().enumerate() {
             let sub_task_id = sub_task_record.id.clone();
+            request_config.task_id = sub_task_id;
+            let mut request_config_clone = request_config.clone();
             requests.push(async move {
-                let task = get_task_tree_join_set(http_client, base_url, token, &sub_task_id).await;
+                let task =
+                    get_task_tree(http_client, base_url, token, &mut request_config_clone).await;
 
                 (i, task)
             });
@@ -330,69 +227,27 @@ async fn get_task_tree_futures_unordered(
     Ok(task)
 }
 
-#[async_recursion]
-async fn get_task_channels(
-    http_client: &reqwest::Client,
-    base_url: &str,
-    token: &str,
-    task_id: &str,
-) -> Result<ClickUpTaskResponseBody, ClickUpServiceError> {
-    let mut task = get_task(http_client, base_url, token, task_id).await?;
-
-    if let ClickUpTaskResponseBody {
-        sub_tasks: Some(sub_tasks),
-        ..
-    } = &mut task
-    {
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        for (i, sub_task_record) in sub_tasks.iter().enumerate() {
-            let http_client_clone = http_client.clone();
-            let base_url_clone = base_url.to_string();
-            let token_clone = token.to_string();
-            let sub_task_id = sub_task_record.id.clone();
-            let tx_clone = tx.clone();
-            std::thread::spawn(async move || {
-                let task = get_task_tree_join_set(
-                    &http_client_clone,
-                    &base_url_clone,
-                    &token_clone,
-                    &sub_task_id,
-                )
-                .await;
-
-                let _ = tx_clone.send((i, task));
-            });
-        }
-
-        while let Some((i, sub_task_request)) = rx.recv().await {
-            let task = match sub_task_request {
-                Ok(task) => task,
-                Err(e) => return Err(e),
-            };
-
-            if let Some(sub_task) = sub_tasks.get_mut(i) {
-                sub_task.task = Some(task);
-            };
-        }
-    };
-
-    Ok(task)
-}
-
 pub async fn get_task(
     http_client: &reqwest::Client,
     base_url: &str,
     token: &str,
-    task_id: &str,
+    request_config: &GetTaskRequest,
 ) -> Result<ClickUpTaskResponseBody, ClickUpServiceError> {
-    let url = format!("{base_url}/api/v2/task/{task_id}");
+    let url = format!("{base_url}/api/v2/task/{}", request_config.task_id);
     let task_future = async {
+        let mut query_params = vec![("include_subtasks", "true")];
+
+        if let Some(workspace_id) = &request_config.workspace_id {
+            query_params.push(("custom_task_ids", "true"));
+            query_params.push(("team_id", workspace_id.as_str()));
+        }
+
         let request = http_client
             .get(url)
             .header(reqwest::header::ACCEPT, "application/json")
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"))
-            .query(&[("include_subtasks", "true")]);
+            .query(&query_params);
 
         let response = match request.send().await {
             Ok(response) => response,
@@ -413,17 +268,23 @@ pub async fn get_task(
         let task = match serde_json::from_str::<ClickUpTaskResponseBody>(&text) {
             Ok(task) => task,
             Err(e) => {
-                return Err(ClickUpServiceError::ParseError(
-                    Box::new(e),
-                    Some(format!("get_task = {status_code} {text}")),
-                ));
+                if text.contains(NOT_AUTHORIZED_ERROR_CODE) && request_config.workspace_id.is_none()
+                {
+                    return Err(ClickUpServiceError::CustomIDError);
+                } else {
+                    return Err(ClickUpServiceError::ParseError(
+                        Box::new(e),
+                        Some(format!("get_task = {status_code} {text}")),
+                    ));
+                }
             }
         };
 
         Ok(task)
     };
 
-    let task_time_in_status_future = get_task_time_in_status(http_client, base_url, token, task_id);
+    let task_time_in_status_future =
+        get_task_time_in_status(http_client, base_url, token, request_config);
 
     let (task, task_time_in_status) = join!(task_future, task_time_in_status_future);
 
@@ -439,17 +300,25 @@ async fn get_task_time_in_status(
     http_client: &reqwest::Client,
     base_url: &str,
     token: &str,
-    task_id: &str,
+    request_config: &GetTaskRequest,
 ) -> Result<ClickUpTimeInStatusResponseBody, ClickUpServiceError> {
-    let url = format!("{base_url}/api/v2/task/{task_id}/time_in_status");
-    let response = match http_client
+    let url = format!(
+        "{base_url}/api/v2/task/{}/time_in_status",
+        request_config.task_id
+    );
+    let mut request = http_client
         .get(url)
         .header(reqwest::header::ACCEPT, "application/json")
         .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"))
-        .send()
-        .await
-    {
+        .header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"));
+
+    if let Some(workspace_id) = &request_config.workspace_id {
+        request = request.query(&[
+            ("custom_task_ids", "true"),
+            ("team_id", workspace_id.as_str()),
+        ]);
+    }
+    let response = match request.send().await {
         Ok(response) => response,
         Err(e) => {
             return Err(ClickUpServiceError::FailedToSendNetworkRequestError(
@@ -468,6 +337,10 @@ async fn get_task_time_in_status(
         Err(e) => {
             if text.contains(TIME_IN_STATUS_NOT_ENABLED_ERROR_CODE) {
                 Err(ClickUpServiceError::TimeInStatusNotEnabled)
+            } else if text.contains(NOT_AUTHORIZED_ERROR_CODE)
+                && request_config.workspace_id.is_none()
+            {
+                Err(ClickUpServiceError::CustomIDError)
             } else {
                 Err(ClickUpServiceError::ParseError(
                     Box::new(e),

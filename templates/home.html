@@ -8,11 +8,19 @@
 {% endblock %}
 
 {% block content %}
-<label for="task_id">Input Task ID:</label>
-<input
-  id="task_id"
-  name="task_id"
-  hx-get="/task"
-  hx-target="#task_evaluation" />
-<div id="task_evaluation"></div>
+<form hx-post="/task" hx-target="#task_evaluation" hx-indicator="#loading">
+  <label for="task_id">Input Task ID:</label>
+  <input id="task_id" name="task_id" />
+  <br />
+  <label for="remove_weekends">Remove Weekends:</label>
+  <input id="remove_weekends" name="remove_weekends" type="checkbox" />
+  <br />
+  <label for="use_custom_id">Use Custom IDs:</label>
+  <input id="use_custom_id" name="use_custom_id" type="checkbox" />
+  <br />
+  <button type="submit">Load Task</button>
+</form>
+<p id="loading" class="htmx-indicator">Loading ...</p>
+<div id="task_evaluation">
+</div>
 {% endblock %}

@@ -6,6 +6,18 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}{{ title }}{% endblock %}</title>
   {% block head %}{% endblock %}
+  <style>
+    /* Initially hide the indicator */
+    .htmx-indicator {
+      opacity: 0;
+      transition: opacity 200ms ease-in; /* Optional: adds a smooth fade-in */
+    }
+
+    /* Show the indicator when the htmx-request class is added */
+    .htmx-indicator.htmx-request {
+      opacity: 1;
+    }
+  </style>
 </head>
 
 <body>

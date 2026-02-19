@@ -1,4 +1,4 @@
-use axum::routing::put;
+use axum::routing::{post, put};
 use axum::{Router, routing::get, serve};
 use clickup_time_in_status_analyzer::AppState;
 use clickup_time_in_status_analyzer::routes::pages::home;
@@ -50,7 +50,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .route("/login", get(login))
         .route("/oauth/redirect", get(oauth_redirect))
         .route("/home", get(home))
-        .route("/task", get(task))
+        .route("/task", post(task))
         .route("/session/workspace", put(put_workspace))
         .layer(session_layer)
         .with_state(app_state);

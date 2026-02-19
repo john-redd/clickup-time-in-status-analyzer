@@ -3,7 +3,7 @@
 use crate::services::clickup::{ClickUpTaskResponseBody, IN_PROGRESS_ORDER_INDEX};
 use chrono::{DateTime, Utc};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Task {
     number: String,
     name: String,
@@ -45,9 +45,7 @@ impl From<ClickUpTaskResponseBody> for Task {
 
         let points = value.points.unwrap_or_default();
 
-        let total_points = sub_tasks
-            .iter()
-            .fold(points, |acc, t| acc + t.total_points);
+        let total_points = sub_tasks.iter().fold(points, |acc, t| acc + t.total_points);
 
         let number = match value.custom_id {
             Some(number) => number,
@@ -63,6 +61,21 @@ impl From<ClickUpTaskResponseBody> for Task {
             total_time_in_dev_status,
             sub_tasks,
         }
+    }
+}
+
+pub enum TimeInStatusFormula {
+    FullTime,
+    NoWeekends,
+}
+
+pub fn apply_no_weekends_formula(task: &mut Task) {
+    task.time_in_dev_status = (task.time_in_dev_status as f64 * 0.7142857143).ceil() as i64;
+    task.total_time_in_dev_status =
+        (task.total_time_in_dev_status as f64 * 0.7142857143).ceil() as i64;
+
+    for task in &mut task.sub_tasks {
+        apply_no_weekends_formula(task);
     }
 }
 
@@ -112,5 +125,6 @@ fn get_days_in_dev_status(task: &ClickUpTaskResponseBody) -> i64 {
         .reduce(|acc, n| acc + n)
         .unwrap_or_default();
 
-    (total as f64 * 0.7142857143).ceil() as i64
+    // (total as f64 * 0.7142857143).ceil() as i64
+    total
 }
